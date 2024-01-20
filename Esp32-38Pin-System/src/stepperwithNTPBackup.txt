@@ -1,0 +1,292 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <RTClib.h>
+#include <WiFi.h>
+#include <FirebaseESP32.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <Audio.h>
+#include <Adafruit_Fingerprint.h>
+#include <LiquidCrystal_I2C.h>
+#include "HX711.h"
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+
+#define WIFI_SSID "Psg567uber" //Lacasa salam dari Ibrahim //Psg567uber
+#define WIFI_PASSWORD "Akca130797" //iyatunggu //Akca130797
+#define API_KEY "AIzaSyB-o1L9crZrI-IqR8S5jmMtMopJeDb98mk"
+#define DATABASE_URL "https://madbox4195-default-rtdb.firebaseio.com/"
+#define ESP32_KEY "Alat1"
+
+// Definisikan pin koneksi & langkah per revolusi motor
+const int SDA_PIN = 21; // SDA pin pada ESP32
+const int SCL_PIN = 22; // SCL pin pada ESP32
+const int dirPin = 18;  
+const int stepPin = 19; 
+const int relaypin = 2;
+const int stepsPerRevolution = 200;
+
+RTC_DS3231 rtc;
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+unsigned long sendDataPrevMillis = 0;
+bool signupOK = false;
+
+String daysOfTheWeek[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+LiquidCrystal_I2C lcd(0x27, 16, 2); // set the LCD address to 0x27 for a 16 chars and 2 line display
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 25200, 60000);
+
+void FirebaseGetTime1();
+void FirebaseGetTime2();
+void StepperRun();
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+  lcd.init();         // initialize the lcd
+  lcd.backlight();    // Turn on the LCD screen backlight
+
+  if (!rtc.begin())
+  {
+    Serial.println("Couldn't find RTC");
+    while (1)
+      ;
+  }
+
+  if (rtc.lostPower()) {
+    Serial.println("RTC lost power, setting the time!");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("Connected with IP : ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+  timeClient.begin();
+  while(!timeClient.update()) {
+    timeClient.forceUpdate();
+  }
+
+  rtc.adjust(DateTime(timeClient.getEpochTime()));
+
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("signUp OK");
+    signupOK = true;
+  } else {
+    Serial.printf("%s\n", config.signer.signupError.message.c_str());
+  }
+  config.token_status_callback = tokenStatusCallback;
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+  pinMode(relaypin, OUTPUT);
+}
+
+void loop() {
+  FirebaseGetTime1();
+}
+
+void FirebaseGetTime1(){
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+  String hari = daysOfTheWeek[now.dayOfTheWeek()];
+
+    if (Firebase.ready() && signupOK)
+  {
+    String path = String(ESP32_KEY) + "/Jam1";
+    if (Firebase.getString(fbdo, path.c_str()))
+    {
+      String waktu = fbdo.stringData();
+      int separatorIndex = waktu.indexOf(':');
+      if (separatorIndex != -1)
+      {
+        String jamString = waktu.substring(0, separatorIndex);
+        String menitString = waktu.substring(separatorIndex + 1);
+        int jamFirebase = jamString.toInt(); // Menyimpan jam dari Firebase
+        int menitFirebase = menitString.toInt(); // Menyimpan menit dari Firebase
+        Serial.print("Data from Firebase: Jam ");
+        Serial.print(jamFirebase < 10 ? "0" : "");
+        Serial.print(jamFirebase);
+        Serial.print(", Menit ");
+        Serial.print(menitFirebase < 10 ? "0" : "");
+        Serial.println(menitFirebase);
+        Serial.print("Jam saat ini : ");
+        Serial.print(jamrtc < 10 ? "0" : "");
+        Serial.print(jamrtc, DEC);
+        Serial.print(" : ");
+        Serial.print(menitrtc < 10 ? "0" : "");
+        Serial.println(menitrtc, DEC);
+        //CODE LCD
+
+        lcd.setCursor(0, 0);
+        lcd.print("Jam  :");
+        lcd.setCursor(6,0);
+        lcd.print(jamrtc < 10 ? "0" : "");
+        lcd.print(jamrtc, DEC);
+        lcd.print(":");
+        lcd.print(menitrtc < 10 ? "0" : "");
+        lcd.print(menitrtc, DEC);
+        lcd.setCursor(0, 1);
+        lcd.print("Obat :");
+        lcd.setCursor(6, 1);
+        lcd.print(jamFirebase < 10 ? "0" : "");
+        lcd.print(jamFirebase, DEC);
+        lcd.print(":");
+        lcd.print(menitFirebase < 10 ? "0" : "");
+        lcd.print(menitFirebase, DEC);
+
+        if (jamrtc == jamFirebase && menitrtc == menitFirebase) // Membandingkan jam dan menit dari RTC dengan jam dan menit dari Firebase
+        {
+          StepperRun();
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Saatnya Minum");
+          lcd.setCursor(0, 1);
+          lcd.print("Obat");
+          delay(2000);
+          lcd.clear();
+          FirebaseGetTime2();
+        }
+      }
+      else
+      {
+        Serial.println("Invalid time format from Firebase");
+      }
+    }
+    else
+    {
+      Serial.print("Failed to get data from Firebase: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    delay(5000); //delay for the run
+  }
+
+
+}
+
+void FirebaseGetTime2(){
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+  String hari = daysOfTheWeek[now.dayOfTheWeek()];
+
+    if (Firebase.ready() && signupOK)
+  {
+    String path = String(ESP32_KEY) + "/Jam2";
+    if (Firebase.getString(fbdo, path.c_str()))
+    {
+      String waktu = fbdo.stringData();
+      int separatorIndex = waktu.indexOf(':');
+      if (separatorIndex != -1)
+      {
+        String jamString = waktu.substring(0, separatorIndex);
+        String menitString = waktu.substring(separatorIndex + 1);
+        int jamFirebase = jamString.toInt(); // Menyimpan jam dari Firebase
+        int menitFirebase = menitString.toInt(); // Menyimpan menit dari Firebase
+        Serial.print("Data from Firebase: Jam ");
+        Serial.print(jamFirebase < 10 ? "0" : "");
+        Serial.print(jamFirebase);
+        Serial.print(", Menit ");
+        Serial.print(menitFirebase < 10 ? "0" : "");
+        Serial.println(menitFirebase);
+        Serial.print("Jam saat ini : ");
+        Serial.print(jamrtc < 10 ? "0" : "");
+        Serial.print(jamrtc, DEC);
+        Serial.print(" : ");
+        Serial.print(menitrtc < 10 ? "0" : "");
+        Serial.println(menitrtc, DEC);
+        //CODE LCD
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Jam  :");
+        lcd.setCursor(6,0);
+        lcd.print(jamrtc < 10 ? "0" : "");
+        lcd.print(jamrtc, DEC);
+        lcd.print(":");
+        lcd.print(menitrtc < 10 ? "0" : "");
+        lcd.print(menitrtc, DEC);
+        lcd.setCursor(0, 1);
+        lcd.print("Obat :");
+        lcd.setCursor(6, 1);
+        lcd.print(jamFirebase < 10 ? "0" : "");
+        lcd.print(jamFirebase, DEC);
+        lcd.print(":");
+        lcd.print(menitFirebase < 10 ? "0" : "");
+        lcd.print(menitFirebase, DEC);
+
+        if (jamrtc == jamFirebase && menitrtc == menitFirebase) // Membandingkan jam dan menit dari RTC dengan jam dan menit dari Firebase
+        {
+          StepperRun();
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Saatnya Minum");
+          lcd.setCursor(0, 1);
+          lcd.print("Obat");
+          delay(2000);
+          lcd.clear();
+        }
+      }
+      else
+      {
+        Serial.println("Invalid time format from Firebase");
+      }
+    }
+    else
+    {
+      Serial.print("Failed to get data from Firebase: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    delay(5000); //delay for the run
+  }
+
+
+}
+
+
+void StepperRun (){
+  digitalWrite(relaypin, HIGH);
+  digitalWrite(dirPin, HIGH);
+  for (int x = 0; x < stepsPerRevolution; x++) {
+  digitalWrite(stepPin, HIGH);
+  delayMicroseconds(1000);
+  digitalWrite(stepPin, LOW);
+  delayMicroseconds(1000);
+  }
+  delay(10000);
+  digitalWrite(relaypin, LOW);
+  }
+
+void DisplayText (){
+  lcd.setCursor(1, 0);
+  lcd.print("Hello World.!");
+  delay(3000);
+  lcd.clear();
+
+  lcd.setCursor(2, 0);
+  lcd.print("This is a LCD ");
+  lcd.setCursor(2, 1);
+  lcd.print("Screen Test");
+  delay(3000);
+  lcd.clear();
+  }

@@ -1,0 +1,41 @@
+#include <Firebase.h>
+#include <Arduino.h>
+#include "HX711.h"
+
+const int LOADCELL_DOUT_PIN = 14;
+const int LOADCELL_SCK_PIN = 13;
+
+HX711 scale;
+
+void setup() {
+  Serial.begin(115200);
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(444);  //untuk 5kg loadcell = 444 // untuk loadcell 1kg = -813.5555555555556
+  Serial.println("Taring...");
+  scale.tare();
+  delay(2000);
+}
+
+void loop() {
+  if (scale.is_ready()) {
+    long firstReading = scale.get_units(10);
+    Serial.print("Membaca data pertama: ");
+    Serial.print(firstReading);
+    Serial.println(" Gram");
+    delay(5000);
+    long secondReading = scale.get_units(10);
+    Serial.print("Membaca data kedua: ");
+    Serial.print(secondReading);
+    Serial.println(" Gram");
+    if (secondReading > firstReading) {
+      Serial.println("Berat yang ditimbang lebih besar pada pembacaan kedua");
+    } else if (secondReading < firstReading) {
+      Serial.println("Berat yang ditimbang lebih kecil pada pembacaan kedua");
+    } else {
+      Serial.println("Berat yang ditimbang sama pada pembacaan kedua");
+    }
+  } else {
+    Serial.println("HX711 tidak ditemukan");
+  }
+  delay(1000);
+}

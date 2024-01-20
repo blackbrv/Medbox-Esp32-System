@@ -1,0 +1,1317 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <RTClib.h>
+#include <WiFi.h>
+#include <FirebaseESP32.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <Adafruit_Fingerprint.h>
+#include <LiquidCrystal_I2C.h>
+#include "Audio.h"
+#include "HX711.h"
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+
+#define WIFI_SSID "Psg567uber" //Lacasa salam dari Ibrahim, Psg567uber, Deklarasi Untuk SSID WiFi
+#define WIFI_PASSWORD "Akca130797" //iyatunggu, Akca130797, Deklarasi Password WiFi
+#define API_KEY "AIzaSyB-o1L9crZrI-IqR8S5jmMtMopJeDb98mk" // Deklarasi API_KEY untuk Firebase
+#define DATABASE_URL "https://madbox4195-default-rtdb.firebaseio.com/" // Deklarasi url untuk firebase
+#define ESP32_KEY "Alat1" //Deklarasi untuk nama alat 
+
+//Deklarasi Pin untuk modul MAX98357A 
+#define I2S_DOUT 25
+#define I2S_BCLK 27
+#define I2S_LRC 26
+
+RTC_DS3231 rtc;
+const int LOADCELL_DOUT_PIN = 14;
+const int LOADCELL_SCK_PIN = 13;
+const int SDA_PIN = 21; // SDA pin pada ESP32 RTC
+const int SCL_PIN = 22; // SCL pin pada ESP32 RTC
+const int dirPin = 18;  // DIR pin pada ESP32 untuk Motor stepper
+const int stepPin = 19; // Step pin pada ESP32 untuk Motor stepper
+const int stepsPerRevolution = 200; // Deklarasi berapa step stepper harus bergerak
+
+String daysOfTheWeek[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+Audio audio; // Deklarasi Library Audio dengan audio
+HX711 scale; // Deklarasi Library HX711 dengan scale
+
+// Code Deklarasi Variabel dan library Firebase ---------------------------------------------------------------------------
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+unsigned long sendDataPrevMillis = 0;
+bool signupOK = false;
+int dataCount = 0;
+//int buttonState = 1;
+int verifnilai = 0;
+int inputted1 = 0;
+int inputted2 = 0;
+int inputted3 = 0;
+int inputted4 = 0;
+int inputted5 = 0;
+int inputted6 = 0;
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 25200, 60000);
+LiquidCrystal_I2C lcd(0x27, 16, 2); // set the LCD address to 0x27 for a 16 chars and 2 line display
+
+// Deklarasi Fingerprint pin dengan mySerial ---------------------------------------------------------------------------
+
+#define mySerial Serial2
+
+const int btn = 12;
+const int relaySolePin = 15;
+const int relaySole2Pin = 5;
+const int relayMotorPin = 4;
+
+int FFID = 0;
+int idFinger = 1;
+
+// Deklarasi Adafruit Fingerpirnt library sebagai Adafruit_Fingerprint ---------------------------------------------------------------------------
+
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+uint8_t id;
+
+// Deklarasi Void yang digunakan ---------------------------------------------------------------------------
+
+uint8_t getFingerprintEnroll();
+int getFingerprintID();
+void EnrollFinger();
+void FingerFound();
+void DefaultLCD();
+
+void sendDataToFirebase1(int data, String dayOfWeek);
+void sendDataToFirebase2(int data, String dayOfWeek);
+void sendDataToFirebase3(int data, String dayOfWeek);
+void sendDataToFirebase4(int data, String dayOfWeek);
+void sendDataToFirebase5(int data, String dayOfWeek);
+void sendDataToFirebase6(int data, String dayOfWeek);
+
+void firebaseGetJam1();
+void firebaseGetJam2();
+void firebaseGetJam3();
+void firebaseGetJam4();
+void firebaseGetJam5();
+void firebaseGetJam6();
+
+void setup()
+{
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN); // Wire begin untuk RTC 
+
+  lcd.init();         // initialize the lcd
+  lcd.backlight();    // Turn on the LCD screen backlight
+
+  audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT); // Modul MAX98357A
+  audio.setVolume(100);
+
+// Code Setup Wifi ---------------------------------------------------------------------------
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("Connected with IP : ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+// Code Setup RTC ---------------------------------------------------------------------------
+
+  if (!rtc.begin())
+  {
+    Serial.println("Couldn't find RTC");
+    while (1)
+      ;
+  }
+
+  if (rtc.lostPower()) {
+    Serial.println("RTC lost power, setting the time!");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+
+  timeClient.begin();
+  while(!timeClient.update()) {
+    timeClient.forceUpdate();
+  }
+
+  rtc.adjust(DateTime(timeClient.getEpochTime()));
+
+// Code Setup Loadcell Tare ---------------------------------------------------------------------------
+
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(-813.556);
+  Serial.print("Sedang melakukan tare...");
+  scale.tare();
+  delay(500);
+
+// Code Setup Firebase ---------------------------------------------------------------------------
+
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("signUp OK");
+    signupOK = true;
+  } else {
+    Serial.printf("%s\n", config.signer.signupError.message.c_str());
+  }
+  config.token_status_callback = tokenStatusCallback;
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+
+    while (!Serial);
+  delay(100);
+
+// Code Setup Fingerprint ---------------------------------------------------------------------------
+
+  Serial.println("\n\nAdafruit Fingerprint sensor");
+  mySerial.begin(57600, SERIAL_8N1, 16, 17); // 17 for RX, 16 for TX
+  
+  if (finger.verifyPassword()) {
+    Serial.println("Found fingerprint sensor!");
+  } else {
+    Serial.println("Did not find fingerprint sensor :");
+    while (1) {
+      delay(1);
+    }
+  }
+
+  Serial.println(F("Reading sensor parameters"));
+  finger.getParameters();
+  Serial.print(F("Status: 0x")); Serial.println(finger.status_reg, HEX);
+  Serial.print(F("Sys ID: 0x")); Serial.println(finger.system_id, HEX);
+  Serial.print(F("Capacity: ")); Serial.println(finger.capacity);
+  Serial.print(F("Security level: ")); Serial.println(finger.security_level);
+  Serial.print(F("Device address: ")); Serial.println(finger.device_addr, HEX);
+  Serial.print(F("Packet len: ")); Serial.println(finger.packet_len);
+  Serial.print(F("Baud rate: ")); Serial.println(finger.baud_rate);
+
+  finger.getTemplateCount();
+
+  if (finger.templateCount == 0) {
+    Serial.print("Sensor doesn't contain any fingerprint data. Please run the 'enroll' example.");
+  }
+  else {
+    Serial.println("Waiting for valid finger...");
+      Serial.print("Sensor contains "); Serial.print(finger.templateCount); Serial.println(" templates");
+  }
+
+// Deklarasi Pin ---------------------------------------------------------------------------
+
+  pinMode(btn, INPUT_PULLUP);
+  pinMode(relaySolePin, OUTPUT);
+  pinMode(relaySole2Pin, OUTPUT);
+  pinMode(relayMotorPin, OUTPUT);
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+}
+
+uint8_t readnumber(void) {
+  uint8_t num = 0;
+    while (num == 0) {
+    while (! Serial.available());
+      num = Serial.parseInt();
+      delay(2000);
+  }
+  return num;
+}
+
+void loop()
+{
+  audio.loop();
+  EnrollFinger();
+  DefaultLCD();
+  firebaseGetJam1();
+  firebaseGetJam2();
+  firebaseGetJam3();
+  firebaseGetJam4();
+  firebaseGetJam5();
+  firebaseGetJam6();
+}
+
+//Code Fingerprint ---------------------------------------------------------------------------
+
+void FingerFound() {
+  FFID = getFingerprintID();
+  if (FFID > 0) {
+    digitalWrite(relaySolePin, HIGH);
+    digitalWrite(relaySole2Pin, HIGH);
+    delay(5000);
+    digitalWrite(relaySolePin, LOW);
+    digitalWrite(relaySole2Pin, LOW);
+  }
+  else if (FFID == 0)
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("No Finger");
+    lcd.setCursor(0, 2);
+    lcd.print("Detected");
+    Serial.println("No Finger detected");
+    delay(2000);
+    lcd.clear();
+  }
+  else if (FFID == -1)
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Didnt Find");
+    lcd.setCursor(0, 2);
+    lcd.print("a match");
+    Serial.println("Didnt Find a match");
+    delay(2000);
+    lcd.clear();
+  }
+  else if (FFID == -2)
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Module Error");
+    Serial.println("Module Error");
+    delay(2000);
+    lcd.clear();
+  }
+}
+
+void EnrollFinger() {
+  //Serial.println("System is Ready");
+  //Serial.println("Please Press The Button to register a fingerprint");
+  int buttonState=digitalRead(btn); //dont forget to add this
+  if(buttonState == 0)
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Daftarkan");
+    lcd.setCursor(0, 2);
+    lcd.print("sidik jari anda");
+    lcd.clear();
+    Serial.println("Ready to enroll a fingerprint!");
+    //Serial.println("Please type in the ID # (from 1 to 127) you want to save this finger as...");
+    id = idFinger;
+    //Serial.print("Enrolling ID #");
+    Serial.println(id);
+    while (!getFingerprintEnroll())break;
+    idFinger++;
+  }
+  else if (btn == 1)
+  {
+    FingerFound();
+  }
+}
+
+uint8_t getFingerprintEnroll() {
+  int p = -1;
+  Serial.print("Waiting for valid finger to enroll as #"); Serial.println(id);
+  while (p != FINGERPRINT_OK) {
+    p = finger.getImage();
+    switch (p) {
+      case FINGERPRINT_OK:
+        Serial.println("Image taken");
+        break;
+      case FINGERPRINT_NOFINGER:
+        Serial.println(".");
+        break;
+      case FINGERPRINT_PACKETRECIEVEERR:
+        Serial.println("Communication error");
+        break;
+      case FINGERPRINT_IMAGEFAIL:
+        Serial.println("Imaging error");
+        break;
+      default:
+        Serial.println("Unknown error");
+        break;
+    }
+    yield();
+  }
+
+  p = finger.image2Tz(1);
+  switch (p) {
+    case FINGERPRINT_OK:
+      Serial.println("Image converted");
+      break;
+    case FINGERPRINT_IMAGEMESS:
+      Serial.println("Image too messy");
+      return p;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return p;
+    case FINGERPRINT_FEATUREFAIL:
+      Serial.println("Could not find fingerprint features");
+      return p;
+    case FINGERPRINT_INVALIDIMAGE:
+      Serial.println("Could not find fingerprint features");
+      return p;
+    default:
+      Serial.println("Unknown error");
+      return p;
+  }
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Lepaskan jari");
+  Serial.println("Remove finger");
+  delay(2000);
+  p = 0;
+  while (p != FINGERPRINT_NOFINGER) {
+    p = finger.getImage();
+    yield();
+  }
+  Serial.print("ID "); Serial.println(id);
+  p = -1;
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Tempelkan jari");
+  lcd.setCursor(0, 2);
+  lcd.print("yang sama");
+  delay(1000);
+  lcd.clear();
+  Serial.println("Place same finger again");
+  while (p != FINGERPRINT_OK) {
+    p = finger.getImage();
+    switch (p) {
+      case FINGERPRINT_OK:
+        Serial.println("Image taken");
+        break;
+      case FINGERPRINT_NOFINGER:
+        Serial.print(".");
+        break;
+      case FINGERPRINT_PACKETRECIEVEERR:
+        Serial.println("Communication error");
+        break;
+      case FINGERPRINT_IMAGEFAIL:
+        Serial.println("Imaging error");
+        break;
+      default:
+        Serial.println("Unknown error");
+        break;
+    }
+  }
+
+
+
+  p = finger.image2Tz(2);
+  switch (p) {
+    case FINGERPRINT_OK:
+      Serial.println("Image converted");
+      break;
+    case FINGERPRINT_IMAGEMESS:
+      Serial.println("Image too messy");
+      return p;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return p;
+    case FINGERPRINT_FEATUREFAIL:
+      Serial.println("Could not find fingerprint features");
+      return p;
+    case FINGERPRINT_INVALIDIMAGE:
+      Serial.println("Could not find fingerprint features");
+      return p;
+    default:
+      Serial.println("Unknown error");
+      return p;
+  }
+
+
+  Serial.print("Creating model for #");  Serial.println(id);
+
+  p = finger.createModel();
+  if (p == FINGERPRINT_OK) {
+    Serial.println("Prints matched!");
+  } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
+    Serial.println("Communication error");
+    return p;
+  } else if (p == FINGERPRINT_ENROLLMISMATCH) {
+    Serial.println("Fingerprints did not match");
+    return p;
+  } else {
+    Serial.println("Unknown error");
+    return p;
+  }
+
+  Serial.print("ID "); Serial.println(id);
+  p = finger.storeModel(id);
+  if (p == FINGERPRINT_OK) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Sidikjari");
+    lcd.setCursor(0, 2);
+    lcd.print("Berhasil");
+    delay(1000);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Disimpan");
+    Serial.println("Stored!");
+    Serial.println("");
+    delay(3000);
+  } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
+    Serial.println("Communication error");
+    Serial.println("");
+    return p;
+  } else if (p == FINGERPRINT_BADLOCATION) {
+    Serial.println("Could not store in that location");
+    Serial.println("");
+    return p;
+  } else if (p == FINGERPRINT_FLASHERR) {
+    Serial.println("Error writing to flash");
+    Serial.println("");
+    return p;
+  } else {
+    Serial.println("Unknown error");
+    Serial.println("");
+    return p;
+  }
+}
+
+int getFingerprintID() {
+  uint8_t p = finger.getImage();
+  switch (p) {
+    case FINGERPRINT_OK:
+      Serial.println("Image taken");
+      break;
+    case FINGERPRINT_NOFINGER:
+      //Serial.println("No finger detected");
+      return 0;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return -2;
+    case FINGERPRINT_IMAGEFAIL:
+      Serial.println("Imaging error");
+      return -2;
+    default:
+      Serial.println("Unknown error");
+      return -2;
+  }
+
+  // OK success!
+
+  p = finger.image2Tz();
+  switch (p) {
+    case FINGERPRINT_OK:
+      Serial.println("Image converted");
+      break;
+    case FINGERPRINT_IMAGEMESS:
+      Serial.println("Image too messy");
+      return -1;
+    case FINGERPRINT_PACKETRECIEVEERR:
+      Serial.println("Communication error");
+      return -2;
+    case FINGERPRINT_FEATUREFAIL:
+      Serial.println("Could not find fingerprint features");
+      return -2;
+    case FINGERPRINT_INVALIDIMAGE:
+      Serial.println("Could not find fingerprint features");
+      return -2;
+    default:
+      Serial.println("Unknown error");
+      return -2;
+  }
+
+  // OK converted!
+  p = finger.fingerFastSearch();
+  if (p == FINGERPRINT_OK) {
+    Serial.println("Found a print match!");
+  } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
+    Serial.println("Communication error");
+    return -2;
+  } else if (p == FINGERPRINT_NOTFOUND) {
+    Serial.println("Did not find a match");
+    return -1;
+  } else {
+    Serial.println("Unknown error");
+    return -2;
+  }
+
+  // found a match!
+  Serial.print("Found ID #"); Serial.print(finger.fingerID);
+  Serial.print(" with confidence of "); Serial.println(finger.confidence);
+  return finger.fingerID;
+}
+
+// Code LCD -------------------------------------------------------------------------------
+
+void DefaultLCD() {
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Jam :");
+  lcd.setCursor(6, 0);
+  lcd.print(jamrtc < 10 ? "0" : "");
+  lcd.print(jamrtc);
+  lcd.print(":");
+  lcd.print(menitrtc < 10 ? "0" : "");
+  lcd.print(menitrtc);
+
+  if (Firebase.ready() && signupOK) {
+    if (inputted1 == 0) {
+      String path = String(ESP32_KEY) + "/Jam1";
+      if (Firebase.getString(fbdo, path.c_str())) {
+        String waktu = fbdo.stringData();
+        int separatorIndex = waktu.indexOf(':');
+        if (separatorIndex != -1) {
+          String jamString = waktu.substring(0, separatorIndex);
+          String menitString = waktu.substring(separatorIndex + 1);
+          int jamFirebase = jamString.toInt();
+          int menitFirebase = menitString.toInt();
+
+          lcd.setCursor(0, 1);
+          lcd.print("Obat 1 :");
+          lcd.setCursor(8, 1);
+          lcd.print(jamFirebase < 10 ? "0" : "");
+          lcd.print(jamFirebase);
+          lcd.print(":");
+          lcd.print(menitFirebase < 10 ? "0" : "");
+          lcd.print(menitFirebase);
+        }
+      }
+    } else if (inputted1 == 1 && inputted2 == 0) {
+      String path = String(ESP32_KEY) + "/Jam2";
+      if (Firebase.getString(fbdo, path.c_str())) {
+        String waktu = fbdo.stringData();
+        int separatorIndex = waktu.indexOf(':');
+        if (separatorIndex != -1) {
+          String jamString = waktu.substring(0, separatorIndex);
+          String menitString = waktu.substring(separatorIndex + 1);
+          int jamFirebase = jamString.toInt();
+          int menitFirebase = menitString.toInt();
+
+          lcd.setCursor(0, 1);
+          lcd.print("Obat 2 :");
+          lcd.setCursor(8, 1);
+          lcd.print(jamFirebase < 10 ? "0" : "");
+          lcd.print(jamFirebase);
+          lcd.print(":");
+          lcd.print(menitFirebase < 10 ? "0" : "");
+          lcd.print(menitFirebase);
+        }
+      }
+    } else if (inputted2 == 1 && inputted3 == 0) {
+      String path = String(ESP32_KEY) + "/Jam3";
+      if (Firebase.getString(fbdo, path.c_str())) {
+        String waktu = fbdo.stringData();
+        int separatorIndex = waktu.indexOf(':');
+        if (separatorIndex != -1) {
+          String jamString = waktu.substring(0, separatorIndex);
+          String menitString = waktu.substring(separatorIndex + 1);
+          int jamFirebase = jamString.toInt();
+          int menitFirebase = menitString.toInt();
+
+          lcd.setCursor(0, 1);
+          lcd.print("Obat 3 :");
+          lcd.setCursor(8, 1);
+          lcd.print(jamFirebase < 10 ? "0" : "");
+          lcd.print(jamFirebase);
+          lcd.print(":");
+          lcd.print(menitFirebase < 10 ? "0" : "");
+          lcd.print(menitFirebase);
+        }
+      }
+    } else if (inputted3 == 1 && inputted4 == 0) {
+      String path = String(ESP32_KEY) + "/Jam4";
+      if (Firebase.getString(fbdo, path.c_str())) {
+        String waktu = fbdo.stringData();
+        int separatorIndex = waktu.indexOf(':');
+        if (separatorIndex != -1) {
+          String jamString = waktu.substring(0, separatorIndex);
+          String menitString = waktu.substring(separatorIndex + 1);
+          int jamFirebase = jamString.toInt();
+          int menitFirebase = menitString.toInt();
+
+          lcd.setCursor(0, 1);
+          lcd.print("Obat 4 :");
+          lcd.setCursor(8, 1);
+          lcd.print(jamFirebase < 10 ? "0" : "");
+          lcd.print(jamFirebase);
+          lcd.print(":");
+          lcd.print(menitFirebase < 10 ? "0" : "");
+          lcd.print(menitFirebase);
+        }
+      }
+    } else if (inputted4 == 1 && inputted5 == 0) {
+      String path = String(ESP32_KEY) + "/Jam5";
+      if (Firebase.getString(fbdo, path.c_str())) {
+        String waktu = fbdo.stringData();
+        int separatorIndex = waktu.indexOf(':');
+        if (separatorIndex != -1) {
+          String jamString = waktu.substring(0, separatorIndex);
+          String menitString = waktu.substring(separatorIndex + 1);
+          int jamFirebase = jamString.toInt();
+          int menitFirebase = menitString.toInt();
+
+          lcd.setCursor(0, 1);
+          lcd.print("Obat 5 :");
+          lcd.setCursor(8, 1);
+          lcd.print(jamFirebase < 10 ? "0" : "");
+          lcd.print(jamFirebase);
+          lcd.print(":");
+          lcd.print(menitFirebase < 10 ? "0" : "");
+          lcd.print(menitFirebase);
+        }
+      }
+    } else if (inputted5 == 1 && inputted6 == 0) {
+      lcd.setCursor(0, 1);
+      lcd.print("Isi Kembali !!");
+    }
+  }
+}
+
+
+//Code Firebase ---------------------------------------------------------------------------
+
+void firebaseGetJam1() {
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+  String hari = daysOfTheWeek[now.dayOfTheWeek()];
+
+  if (Firebase.ready() && signupOK) {
+    String path = String(ESP32_KEY) + "/Jam1";
+    if (Firebase.getString(fbdo, path.c_str())) {
+      String waktu = fbdo.stringData();
+      int separatorIndex = waktu.indexOf(':');
+      if (separatorIndex != -1) {
+        String jamString = waktu.substring(0, separatorIndex);
+        String menitString = waktu.substring(separatorIndex + 1);
+        int jamFirebase = jamString.toInt();
+        int menitFirebase = menitString.toInt();
+
+        Serial.print("Data from Firebase: Jam ");
+        Serial.print(jamFirebase);
+        Serial.print(", Menit ");
+        Serial.println(menitFirebase);
+        Serial.print("Jam saat ini : ");
+        Serial.print(jamrtc, DEC);
+        Serial.print(" : ");
+        Serial.println(menitrtc, DEC);
+
+        if (jamrtc == jamFirebase && menitrtc == menitFirebase) {
+          audio.connecttospeech("Saatnya Minum Obat", "id"); // Google TTS
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Saatnya Minum");
+          lcd.setCursor(0, 1);
+          lcd.print("Obat !!");
+          digitalWrite(relayMotorPin, HIGH);
+          digitalWrite(dirPin, HIGH);
+
+          for (int x = 0; x < stepsPerRevolution; x++) {
+            digitalWrite(stepPin, HIGH);
+            delayMicroseconds(1000);
+            digitalWrite(stepPin, LOW);
+            delayMicroseconds(1000);
+            digitalWrite(relayMotorPin, LOW);
+          }
+
+          inputted1 = 1;
+          delay(3000);
+          lcd.clear();
+          DefaultLCD();
+
+          // Code Loadcell
+          if (scale.is_ready()) {
+            long firstReading = scale.get_units(10);
+            Serial.print("Membaca data pertama: ");
+            Serial.print(firstReading);
+            Serial.println(" Gram");
+            delay(5000);
+            long secondReading = scale.get_units(10);
+            Serial.print("Membaca data kedua: ");
+            Serial.print(secondReading);
+            Serial.println(" Gram");
+
+            if (secondReading > verifnilai) {
+              sendDataToFirebase1(1, hari);
+            } else if (secondReading == firstReading) {
+              sendDataToFirebase1(0, hari);
+            }
+          } else {
+            Serial.println("HX711 tidak ditemukan");
+          }
+        }
+      } else {
+        Serial.println("Invalid time format from Firebase");
+      }
+    } else {
+      Serial.print("Failed to get data from Firebase: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    delay(5000);
+  }
+}
+
+void firebaseGetJam2() {
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+  String hari = daysOfTheWeek[now.dayOfTheWeek()];
+
+  if (Firebase.ready() && signupOK) {
+    String path = String(ESP32_KEY) + "/Jam2";
+    if (Firebase.getString(fbdo, path.c_str())) {
+      String waktu = fbdo.stringData();
+      int separatorIndex = waktu.indexOf(':');
+      if (separatorIndex != -1) {
+        String jamString = waktu.substring(0, separatorIndex);
+        String menitString = waktu.substring(separatorIndex + 1);
+        int jamFirebase = jamString.toInt();
+        int menitFirebase = menitString.toInt();
+
+        Serial.print("Data from Firebase: Jam ");
+        Serial.print(jamFirebase);
+        Serial.print(", Menit ");
+        Serial.println(menitFirebase);
+        Serial.print("Jam saat ini : ");
+        Serial.print(jamrtc, DEC);
+        Serial.print(" : ");
+        Serial.println(menitrtc, DEC);
+
+        if (jamrtc == jamFirebase && menitrtc == menitFirebase) {
+          audio.connecttospeech("Saatnya Minum Obat", "id"); // Google TTS
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Saatnya Minum");
+          lcd.setCursor(0, 1);
+          lcd.print("Obat !!");
+          digitalWrite(relayMotorPin, HIGH);
+          digitalWrite(dirPin, HIGH);
+
+          for (int x = 0; x < stepsPerRevolution; x++) {
+            digitalWrite(stepPin, HIGH);
+            delayMicroseconds(1000);
+            digitalWrite(stepPin, LOW);
+            delayMicroseconds(1000);
+            digitalWrite(relayMotorPin, LOW);
+          }
+
+          inputted2 = 1;
+          delay(3000);
+          lcd.clear();
+          DefaultLCD();
+
+          // Code Loadcell
+          if (scale.is_ready()) {
+            long firstReading = scale.get_units(10);
+            Serial.print("Membaca data pertama: ");
+            Serial.print(firstReading);
+            Serial.println(" Gram");
+            delay(5000);
+            long secondReading = scale.get_units(10);
+            Serial.print("Membaca data kedua: ");
+            Serial.print(secondReading);
+            Serial.println(" Gram");
+
+            if (secondReading > verifnilai) {
+              sendDataToFirebase2(1, hari);
+            } else if (secondReading == firstReading) {
+              sendDataToFirebase2(0, hari);
+            }
+          } else {
+            Serial.println("HX711 tidak ditemukan");
+          }
+        }
+      } else {
+        Serial.println("Invalid time format from Firebase");
+      }
+    } else {
+      Serial.print("Failed to get data from Firebase: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    delay(5000);
+  }
+}
+
+void firebaseGetJam3() {
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+  String hari = daysOfTheWeek[now.dayOfTheWeek()];
+
+  if (Firebase.ready() && signupOK) {
+    String path = String(ESP32_KEY) + "/Jam3";
+    if (Firebase.getString(fbdo, path.c_str())) {
+      String waktu = fbdo.stringData();
+      int separatorIndex = waktu.indexOf(':');
+      if (separatorIndex != -1) {
+        String jamString = waktu.substring(0, separatorIndex);
+        String menitString = waktu.substring(separatorIndex + 1);
+        int jamFirebase = jamString.toInt();
+        int menitFirebase = menitString.toInt();
+
+        Serial.print("Data from Firebase: Jam ");
+        Serial.print(jamFirebase);
+        Serial.print(", Menit ");
+        Serial.println(menitFirebase);
+        Serial.print("Jam saat ini : ");
+        Serial.print(jamrtc, DEC);
+        Serial.print(" : ");
+        Serial.println(menitrtc, DEC);
+
+        if (jamrtc == jamFirebase && menitrtc == menitFirebase) {
+          audio.connecttospeech("Saatnya Minum Obat", "id"); // Google TTS
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Saatnya Minum");
+          lcd.setCursor(0, 1);
+          lcd.print("Obat !!");
+          digitalWrite(relayMotorPin, HIGH);
+          digitalWrite(dirPin, HIGH);
+
+          for (int x = 0; x < stepsPerRevolution; x++) {
+            digitalWrite(stepPin, HIGH);
+            delayMicroseconds(1000);
+            digitalWrite(stepPin, LOW);
+            delayMicroseconds(1000);
+            digitalWrite(relayMotorPin, LOW);
+          }
+
+          inputted3 = 1;
+          delay(3000);
+          lcd.clear();
+          DefaultLCD();
+
+          // Code Loadcell
+          if (scale.is_ready()) {
+            long firstReading = scale.get_units(10);
+            Serial.print("Membaca data pertama: ");
+            Serial.print(firstReading);
+            Serial.println(" Gram");
+            delay(5000);
+            long secondReading = scale.get_units(10);
+            Serial.print("Membaca data kedua: ");
+            Serial.print(secondReading);
+            Serial.println(" Gram");
+
+            if (secondReading > verifnilai) {
+              sendDataToFirebase3(1, hari);
+            } else if (secondReading == firstReading) {
+              sendDataToFirebase3(0, hari);
+            }
+          } else {
+            Serial.println("HX711 tidak ditemukan");
+          }
+        }
+      } else {
+        Serial.println("Invalid time format from Firebase");
+      }
+    } else {
+      Serial.print("Failed to get data from Firebase: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    delay(5000);
+  }
+}
+
+void firebaseGetJam4() {
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+  String hari = daysOfTheWeek[now.dayOfTheWeek()];
+
+  if (Firebase.ready() && signupOK) {
+    String path = String(ESP32_KEY) + "/Jam4";
+    if (Firebase.getString(fbdo, path.c_str())) {
+      String waktu = fbdo.stringData();
+      int separatorIndex = waktu.indexOf(':');
+      if (separatorIndex != -1) {
+        String jamString = waktu.substring(0, separatorIndex);
+        String menitString = waktu.substring(separatorIndex + 1);
+        int jamFirebase = jamString.toInt();
+        int menitFirebase = menitString.toInt();
+
+        Serial.print("Data from Firebase: Jam ");
+        Serial.print(jamFirebase);
+        Serial.print(", Menit ");
+        Serial.println(menitFirebase);
+        Serial.print("Jam saat ini : ");
+        Serial.print(jamrtc, DEC);
+        Serial.print(" : ");
+        Serial.println(menitrtc, DEC);
+
+        if (jamrtc == jamFirebase && menitrtc == menitFirebase) {
+          audio.connecttospeech("Saatnya Minum Obat", "id"); // Google TTS
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Saatnya Minum");
+          lcd.setCursor(0, 1);
+          lcd.print("Obat !!");
+          digitalWrite(relayMotorPin, HIGH);
+          digitalWrite(dirPin, HIGH);
+
+          for (int x = 0; x < stepsPerRevolution; x++) {
+            digitalWrite(stepPin, HIGH);
+            delayMicroseconds(1000);
+            digitalWrite(stepPin, LOW);
+            delayMicroseconds(1000);
+            digitalWrite(relayMotorPin, LOW);
+          }
+
+          inputted4 = 1;
+          delay(3000);
+          lcd.clear();
+          DefaultLCD();
+
+          // Code Loadcell
+          if (scale.is_ready()) {
+            long firstReading = scale.get_units(10);
+            Serial.print("Membaca data pertama: ");
+            Serial.print(firstReading);
+            Serial.println(" Gram");
+            delay(5000);
+            long secondReading = scale.get_units(10);
+            Serial.print("Membaca data kedua: ");
+            Serial.print(secondReading);
+            Serial.println(" Gram");
+
+            if (secondReading > verifnilai) {
+              sendDataToFirebase4(1, hari);
+            } else if (secondReading == firstReading) {
+              sendDataToFirebase4(0, hari);
+            }
+          } else {
+            Serial.println("HX711 tidak ditemukan");
+          }
+        }
+      } else {
+        Serial.println("Invalid time format from Firebase");
+      }
+    } else {
+      Serial.print("Failed to get data from Firebase: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    delay(5000);
+  }
+}
+
+void firebaseGetJam5() {
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+  String hari = daysOfTheWeek[now.dayOfTheWeek()];
+
+  if (Firebase.ready() && signupOK) {
+    String path = String(ESP32_KEY) + "/Jam5";
+    if (Firebase.getString(fbdo, path.c_str())) {
+      String waktu = fbdo.stringData();
+      int separatorIndex = waktu.indexOf(':');
+      if (separatorIndex != -1) {
+        String jamString = waktu.substring(0, separatorIndex);
+        String menitString = waktu.substring(separatorIndex + 1);
+        int jamFirebase = jamString.toInt();
+        int menitFirebase = menitString.toInt();
+
+        Serial.print("Data from Firebase: Jam ");
+        Serial.print(jamFirebase);
+        Serial.print(", Menit ");
+        Serial.println(menitFirebase);
+        Serial.print("Jam saat ini : ");
+        Serial.print(jamrtc, DEC);
+        Serial.print(" : ");
+        Serial.println(menitrtc, DEC);
+
+        if (jamrtc == jamFirebase && menitrtc == menitFirebase) {
+          audio.connecttospeech("Saatnya Minum Obat", "id"); // Google TTS
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Saatnya Minum");
+          lcd.setCursor(0, 1);
+          lcd.print("Obat !!");
+          digitalWrite(relayMotorPin, HIGH);
+          digitalWrite(dirPin, HIGH);
+
+          for (int x = 0; x < stepsPerRevolution; x++) {
+            digitalWrite(stepPin, HIGH);
+            delayMicroseconds(1000);
+            digitalWrite(stepPin, LOW);
+            delayMicroseconds(1000);
+            digitalWrite(relayMotorPin, LOW);
+          }
+
+          inputted5 = 1;
+          delay(3000);
+          lcd.clear();
+          DefaultLCD();
+
+          // Code Loadcell
+          if (scale.is_ready()) {
+            long firstReading = scale.get_units(10);
+            Serial.print("Membaca data pertama: ");
+            Serial.print(firstReading);
+            Serial.println(" Gram");
+            delay(5000);
+            long secondReading = scale.get_units(10);
+            Serial.print("Membaca data kedua: ");
+            Serial.print(secondReading);
+            Serial.println(" Gram");
+
+            if (secondReading > verifnilai) {
+              sendDataToFirebase5(1, hari);
+            } else if (secondReading == firstReading) {
+              sendDataToFirebase5(0, hari);
+            }
+          } else {
+            Serial.println("HX711 tidak ditemukan");
+          }
+        }
+      } else {
+        Serial.println("Invalid time format from Firebase");
+      }
+    } else {
+      Serial.print("Failed to get data from Firebase: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    delay(5000);
+  }
+}
+
+void firebaseGetJam6() {
+  DateTime now = rtc.now();
+  int jamrtc = now.hour();
+  int menitrtc = now.minute();
+  String hari = daysOfTheWeek[now.dayOfTheWeek()];
+
+  if (Firebase.ready() && signupOK) {
+    String path = String(ESP32_KEY) + "/Jam6";
+    if (Firebase.getString(fbdo, path.c_str())) {
+      String waktu = fbdo.stringData();
+      int separatorIndex = waktu.indexOf(':');
+      if (separatorIndex != -1) {
+        String jamString = waktu.substring(0, separatorIndex);
+        String menitString = waktu.substring(separatorIndex + 1);
+        int jamFirebase = jamString.toInt();
+        int menitFirebase = menitString.toInt();
+
+        Serial.print("Data from Firebase: Jam ");
+        Serial.print(jamFirebase);
+        Serial.print(", Menit ");
+        Serial.println(menitFirebase);
+        Serial.print("Jam saat ini : ");
+        Serial.print(jamrtc, DEC);
+        Serial.print(" : ");
+        Serial.println(menitrtc, DEC);
+
+        if (jamrtc == jamFirebase && menitrtc == menitFirebase) {
+          audio.connecttospeech("Saatnya Minum Obat", "id"); // Google TTS
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Saatnya Minum");
+          lcd.setCursor(0, 1);
+          lcd.print("Obat !!");
+          digitalWrite(relayMotorPin, HIGH);
+          digitalWrite(dirPin, HIGH);
+
+          for (int x = 0; x < stepsPerRevolution; x++) {
+            digitalWrite(stepPin, HIGH);
+            delayMicroseconds(1000);
+            digitalWrite(stepPin, LOW);
+            delayMicroseconds(1000);
+            digitalWrite(relayMotorPin, LOW);
+          }
+
+          inputted6 = 1;
+          delay(3000);
+          lcd.clear();
+          DefaultLCD();
+
+          // Code Loadcell
+          if (scale.is_ready()) {
+            long firstReading = scale.get_units(10);
+            Serial.print("Membaca data pertama: ");
+            Serial.print(firstReading);
+            Serial.println(" Gram");
+            delay(5000);
+            long secondReading = scale.get_units(10);
+            Serial.print("Membaca data kedua: ");
+            Serial.print(secondReading);
+            Serial.println(" Gram");
+
+            if (secondReading > verifnilai) {
+              sendDataToFirebase6(1, hari);
+            } else if (secondReading == firstReading) {
+              sendDataToFirebase6(0, hari);
+            }
+          } else {
+            Serial.println("HX711 tidak ditemukan");
+          }
+        }
+      } else {
+        Serial.println("Invalid time format from Firebase");
+      }
+    } else {
+      Serial.print("Failed to get data from Firebase: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    delay(5000);
+  }
+}
+
+//Code Kirim Data Firebase ---------------------------------------------------------------------------
+
+void sendDataToFirebase1(int data, String dayOfWeek)
+{
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0))
+  {
+    sendDataPrevMillis = millis();
+    String path = String(ESP32_KEY) + "/" + dayOfWeek + " minum obat jam1";
+    String index = String(dataCount);
+    String indexedValue = String(data);
+    if (Firebase.setString(fbdo, path.c_str(), indexedValue.c_str())) 
+    {
+      Serial.print("Data ");
+      Serial.print(data);
+      Serial.print(" berhasil dikirim ke ");
+      Serial.print(fbdo.dataPath());
+      Serial.print(" dengan indeks ");
+      Serial.println(index);
+      dataCount++;
+    }
+    else
+    {
+      Serial.print("Gagal mengirim data: ");
+      Serial.println(fbdo.errorReason());
+    }
+  }
+}
+
+void sendDataToFirebase2(int data, String dayOfWeek)
+{
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0))
+  {
+    sendDataPrevMillis = millis();
+    String path = String(ESP32_KEY) + "/" + dayOfWeek + " minum obat jam2";
+    String index = String(dataCount);
+    String indexedValue = String(data);
+    if (Firebase.setString(fbdo, path.c_str(), indexedValue.c_str()))
+    {
+      Serial.print("Data ");
+      Serial.print(data);
+      Serial.print(" berhasil dikirim ke ");
+      Serial.print(fbdo.dataPath());
+      Serial.print(" dengan indeks ");
+      Serial.println(index);
+      dataCount++;
+    }
+    else
+    {
+      Serial.print("Gagal mengirim data: ");
+      Serial.println(fbdo.errorReason());
+    }
+  }
+}
+
+void sendDataToFirebase3(int data, String dayOfWeek)
+{
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0))
+  {
+    sendDataPrevMillis = millis();
+    String path = String(ESP32_KEY) + "/" + dayOfWeek + " minum obat jam3";
+    String index = String(dataCount);
+    String indexedValue = String(data);
+    if (Firebase.setString(fbdo, path.c_str(), indexedValue.c_str()))
+    {
+      Serial.print("Data ");
+      Serial.print(data);
+      Serial.print(" berhasil dikirim ke ");
+      Serial.print(fbdo.dataPath());
+      Serial.print(" dengan indeks ");
+      Serial.println(index);
+      dataCount++;
+    }
+    else
+    {
+      Serial.print("Gagal mengirim data: ");
+      Serial.println(fbdo.errorReason());
+    }
+  }
+}
+
+void sendDataToFirebase4(int data, String dayOfWeek)
+{
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0))
+  {
+    sendDataPrevMillis = millis();
+    String path = String(ESP32_KEY) + "/" + dayOfWeek + " minum obat jam4";
+    String index = String(dataCount);
+    String indexedValue = String(data);
+    if (Firebase.setString(fbdo, path.c_str(), indexedValue.c_str()))
+    {
+      Serial.print("Data ");
+      Serial.print(data);
+      Serial.print(" berhasil dikirim ke ");
+      Serial.print(fbdo.dataPath());
+      Serial.print(" dengan indeks ");
+      Serial.println(index);
+      dataCount++;
+    }
+    else
+    {
+      Serial.print("Gagal mengirim data: ");
+      Serial.println(fbdo.errorReason());
+    }
+  }
+}
+
+void sendDataToFirebase5(int data, String dayOfWeek)
+{
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0))
+  {
+    sendDataPrevMillis = millis();
+    String path = String(ESP32_KEY) + "/" + dayOfWeek + " minum obat jam5";
+    String index = String(dataCount);
+    String indexedValue = String(data);
+    if (Firebase.setString(fbdo, path.c_str(), indexedValue.c_str()))
+    {
+      Serial.print("Data ");
+      Serial.print(data);
+      Serial.print(" berhasil dikirim ke ");
+      Serial.print(fbdo.dataPath());
+      Serial.print(" dengan indeks ");
+      Serial.println(index);
+      dataCount++;
+    }
+    else
+    {
+      Serial.print("Gagal mengirim data: ");
+      Serial.println(fbdo.errorReason());
+    }
+  }
+}
+
+void sendDataToFirebase6(int data, String dayOfWeek)
+{
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0))
+  {
+    sendDataPrevMillis = millis();
+    String path = String(ESP32_KEY) + "/" + dayOfWeek + " minum obat jam6";
+    String index = String(dataCount);
+    String indexedValue = String(data);
+    if (Firebase.setString(fbdo, path.c_str(), indexedValue.c_str()))
+    {
+      Serial.print("Data ");
+      Serial.print(data);
+      Serial.print(" berhasil dikirim ke ");
+      Serial.print(fbdo.dataPath());
+      Serial.print(" dengan indeks ");
+      Serial.println(index);
+      dataCount++;
+    }
+    else
+    {
+      Serial.print("Gagal mengirim data: ");
+      Serial.println(fbdo.errorReason());
+    }
+  }
+}

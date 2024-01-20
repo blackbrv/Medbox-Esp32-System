@@ -1,0 +1,35 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <RTClib.h>
+#include <WiFi.h>
+#include <FirebaseESP32.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <Audio.h>
+#include <Adafruit_Fingerprint.h>
+#include <LiquidCrystal_I2C.h>
+#include "HX711.h"
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+
+// Define pin connections
+const int dirPin = 18;
+const int stepPin = 19;
+const int stepsPerRevolution = 200;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+}
+
+void loop() {
+    digitalWrite(dirPin, LOW);
+    for (int x = 0; x < stepsPerRevolution; x++) {
+      digitalWrite(stepPin, HIGH);
+      delayMicroseconds(500);
+      digitalWrite(stepPin, LOW);
+      delayMicroseconds(500);
+    }
+    delay(1000); // Tunggu 1 detik sebelum putaran berikutnya
+}

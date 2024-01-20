@@ -1,0 +1,198 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <RTClib.h>
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>
+#include <FirebaseJson.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <Adafruit_Fingerprint.h>
+#include <LiquidCrystal_I2C.h>
+#include "Audio.h"
+#include "HX711.h"
+#include "addons/TokenHelper.h"
+
+#define WIFI_SSID "Psg567uber" //Lacasa salam dari Ibrahim, Psg567uber, Deklarasi Untuk SSID WiFi
+#define WIFI_PASSWORD "Akca130797" //iyatunggu, Akca130797, Deklarasi Password WiFi
+#define API_KEY "AIzaSyB-o1L9crZrI-IqR8S5jmMtMopJeDb98mk" // Deklarasi API_KEY untuk Firebase
+#define DATABASE_URL "https://madbox4195-default-rtdb.firebaseio.com/" // Deklarasi url untuk firebase
+#define ESP32_KEY "Alat_Test" //Deklarasi untuk nama alat 
+#define FIREBASE_PROJECT_ID "madbox4195"
+#define USER_EMAIL "esp.admin@esp32.com"
+#define USER_PASSWORD "adminesp32"
+
+
+const int SDA_PIN = 21; // SDA pin pada ESP32 RTC
+const int SCL_PIN = 22; // SCL pin pada ESP32 RTC
+String daysOfTheWeek[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+RTC_DS3231 rtc;
+
+
+unsigned long dataMillis = 0;
+bool taskCompleted = false;
+int data = 1;
+int maxIndexData = 3;
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 25200, 60000);
+
+void checkDaTime();
+
+String getData(String field) {
+  DateTime now = rtc.now();
+  int date = now.day();
+  int month = now.month();
+  int year = now.year();
+
+  char buffer [25] = "";
+
+  sprintf(buffer, "%d-%d-%04d", date, month, year);
+
+  String nowDocumentPath = String(ESP32_KEY) + "/hour_data_" + buffer; //!!MUSH USE THIS FOR DOCUMENTPATH
+  String documentPath = String(ESP32_KEY) + "/hour_data_16-1-2024";
+  //Serial.println(nowDocumentPath);
+  if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()));
+  //Serial.printf(fbdo.payload().c_str());
+  else
+    Serial.println(fbdo.errorReason());
+  FirebaseJson jason;
+  jason.setJsonData(fbdo.payload().c_str());
+  FirebaseJsonData jasonData;
+  jason.get(jasonData, "fields/jam" + field + "/stringValue");
+  String value = jasonData.stringValue;
+  //Serial.println(value);
+  return value;
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD); //"Wokwi-GUEST", "", 6; WIFI_SSID, WIFI_PASSWORD
+  Serial.print("Connecting to Wi-Fi");
+  unsigned long ms = millis();
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+  if (!rtc.begin())
+  {
+    Serial.println("Couldn't find RTC");
+    while (1)
+      ;
+  }
+
+  if (rtc.lostPower()) {
+    Serial.println("RTC lost power, setting the time!");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+
+  timeClient.begin();
+  while (!timeClient.update()) {
+    timeClient.forceUpdate();
+  }
+
+  rtc.adjust(DateTime(timeClient.getEpochTime()));
+
+
+  Serial.printf("Firebase Client v%s\n\n", FIREBASE_CLIENT_VERSION);
+
+  config.api_key = API_KEY;
+
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  config.token_status_callback = tokenStatusCallback;
+
+  Firebase.reconnectNetwork(true);
+
+  fbdo.setResponseSize(2048);
+
+  Firebase.begin(&config, &auth);
+
+  Serial.print("Firebase Connected");
+}
+
+void loop()
+{
+  checkDaTime();
+}
+
+void checkDaTime() {
+  FirebaseJson checkJson;
+  DateTime tnow = rtc.now();
+  int tdate = tnow.day();
+  int tmonth = tnow.month();
+  int tyear = tnow.year();
+  int tHour = tnow.hour();
+  int tMinutes = tnow.minute();
+  char dataPath [25] = "";
+  sprintf(dataPath, "%d-%d-%04d", tdate, tmonth, tyear);
+  String doc_Path = String(ESP32_KEY) + "/" + dataPath;
+  for (data; data < maxIndexData;)
+  {
+    DateTime rNow = rtc.now();
+    int rHour = rNow.hour();
+    int rMinute = rNow.minute();
+    String index = String(data);
+    String jam = getData(index);
+    int separatorIndex = jam.indexOf(':');
+    if (separatorIndex != -1)
+    {
+      String jamString = jam.substring(0, separatorIndex);
+      String menitString = jam.substring(separatorIndex + 1);
+      int fJam = jamString.toInt();
+      int fMinute = menitString.toInt();
+      Serial.print("Jam Sekarang : ");
+      Serial.print(rHour);
+      Serial.print(" : ");
+      Serial.println(rMinute);
+      Serial.print("Jam Obat ke -");
+      Serial.print(index);
+      Serial.print(" = ");
+      Serial.print(fJam);
+      Serial.print(" : ");
+      Serial.println(fMinute);
+      delay(1000);
+      if (fJam == rHour && fMinute == rMinute)
+      {
+        Serial.print("Saatnya Minum Obat !!");
+        checkJson.set("fields/minum_jam" + index + "/stringValue", "1");
+        if (Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", doc_Path.c_str(), checkJson.raw()))
+          Serial.println("Data 1 Stored, at Jam" + index);
+        else if (fbdo.errorReason().indexOf("already exists" > 0))
+        {
+          if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", doc_Path.c_str(), checkJson.raw(), "minum_jam" + index))
+            Serial.println("Data 1 Stored, at Jam" + index);
+          else
+            Serial.println(fbdo.errorReason());
+        }
+        data++;
+      }
+    }
+  }
+  Serial.println("Tidak ada jadwal lagi Selamat Beraktifitas !! :)");
+  Serial.print("Jam Sekarang : ");
+  Serial.println(String(tHour) + " : " + String(tMinutes));
+  delay(1000);
+  if (tHour == 13 && tMinutes == 30)
+  {
+    Serial.println("Semoga Cepat Sembuh !!");
+    ESP.restart();
+  }
+
+}
+
+void getPath() {
+
+}

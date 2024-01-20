@@ -1,0 +1,39 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <RTClib.h>
+#include <WiFi.h>
+#include <FirebaseESP32.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <Audio.h>
+#include <Adafruit_Fingerprint.h>
+#include <LiquidCrystal_I2C.h>
+#include "HX711.h"
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+
+const int BUTTON_PIN = 12; // GIOP21 pin connected to button
+const int relayPin = 15;
+int buttonState = 1;
+
+void setup() {
+  // initialize serial communication at 9600 bits per second:
+  Serial.begin(115200);
+  // initialize the pushbutton pin as an pull-up input
+  // the pull-up input pin will be HIGH when the switch is open and LOW when the switch is closed.
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(relayPin, OUTPUT);
+}
+
+void loop() {
+  // read the state of the switch/button:
+  int buttonState = digitalRead(BUTTON_PIN);
+
+  if(buttonState == 0){
+    digitalWrite(relayPin, HIGH);
+    delay(3000);
+    digitalWrite(relayPin, LOW);
+  }
+  // print out the button's state
+  Serial.println(buttonState);
+}
