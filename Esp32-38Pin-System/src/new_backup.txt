@@ -1,19 +1,18 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <RTClib.h>
-#include <WiFi.h>
 #include <Firebase_ESP_Client.h>
 #include <FirebaseJson.h>
 #include <WiFiUdp.h>
+#include <WiFi.h>
 #include <NTPClient.h>
 #include <Adafruit_Fingerprint.h>
 #include <LiquidCrystal_I2C.h>
+#include "WiFiMulti.h"
 #include "Audio.h"
 #include "HX711.h"
 #include "addons/TokenHelper.h"
 
-#define WIFI_SSID "Psg567uber" //Lacasa salam dari Ibrahim, Psg567uber, Deklarasi Untuk SSID WiFi
-#define WIFI_PASSWORD "Akca130797" //iyatunggu, Akca130797, Deklarasi Password WiFi
 #define API_KEY "AIzaSyB-o1L9crZrI-IqR8S5jmMtMopJeDb98mk" // Deklarasi API_KEY untuk Firebase
 #define DATABASE_URL "https://madbox4195-default-rtdb.firebaseio.com/" // Deklarasi url untuk firebase
 #define ESP32_KEY "Alat_Test" //Deklarasi untuk nama alat 
@@ -33,6 +32,9 @@ const int LOADCELL_SCK_PIN = 13;
 const int dirPin = 18;  // DIR pin pada ESP32 untuk Motor stepper
 const int stepPin = 19; // Step pin pada ESP32 untuk Motor stepper
 const int stepsPerRevolution = 200; // Deklarasi berapa step stepper harus bergerak
+
+String ssid =  "Lacasa salam dari Ibrahim"; //Lacasa salam dari Ibrahim, Psg567uber, Deklarasi Untuk SSID WiFi
+String password =  "iyatunggu"; //iyatunggu, Akca130797, Deklarasi Password WiFi
 String daysOfTheWeek[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
 Audio audio; // Deklarasi Library Audio dengan audio
@@ -41,12 +43,13 @@ FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 RTC_DS3231 rtc;
+WiFiMulti wifiMulti;
 
 
 unsigned long dataMillis = 0;
 bool taskCompleted = false;
 int data = 1;
-int maxIndexData = 3;
+int maxIndexData = 7;
 int verifnilai = 0;
 
 WiFiUDP ntpUDP;
@@ -110,19 +113,8 @@ void setup()
   audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT); // Modul MAX98357A
   audio.setVolume(100);
 
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD); //"Wokwi-GUEST", "", 6; WIFI_SSID, WIFI_PASSWORD
-  Serial.print("Connecting to Wi-Fi");
-  unsigned long ms = millis();
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    Serial.print(".");
-    delay(300);
-  }
-  Serial.println();
-  Serial.print("Connected with IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.println();
-
+  wifiMulti.addAP(ssid.c_str(), password.c_str());
+  wifiMulti.run();
   // Kode Check RTC
 
   if (!rtc.begin())
@@ -149,7 +141,7 @@ void setup()
   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
   scale.set_scale(-813.556);
   Serial.print("Sedang melakukan tare...");
-  scale.tare();
+  //scale.tare();
   delay(500);
 
   // Code Setup Firebase ---------------------------------------------------------------------------
@@ -173,17 +165,17 @@ void setup()
 
   // Code Setup Fingerprint ---------------------------------------------------------------------------
 
-  Serial.println("\n\nAdafruit Fingerprint sensor");
-  mySerial.begin(57600, SERIAL_8N1, 16, 17); // 17 for RX, 16 for TX
+  //Serial.println("\n\nAdafruit Fingerprint sensor");
+  //mySerial.begin(57600, SERIAL_8N1, 16, 17); // 17 for RX, 16 for TX
 
-  if (finger.verifyPassword()) {
-    Serial.println("Found fingerprint sensor!");
-  } else {
-    Serial.println("Did not find fingerprint sensor :");
-    while (1) {
-      delay(1);
-    }
-  }
+  //if (finger.verifyPassword()) {
+    //Serial.println("Found fingerprint sensor!");
+  //} else {
+    //Serial.println("Did not find fingerprint sensor :");
+    //while (1) {
+      //delay(1);
+    //}
+  //}
 
   Serial.println(F("Reading sensor parameters"));
   finger.getParameters();
@@ -218,7 +210,6 @@ void setup()
 
 void loop()
 {
-  audio.loop();
   checkDaTime();
   EnrollFinger();
 }
@@ -519,6 +510,7 @@ int getFingerprintID() {
 }
 
 void checkDaTime() {
+  audio.loop();
   FirebaseJson checkJson;
   DateTime tnow = rtc.now();
   int tdate = tnow.day();
@@ -553,10 +545,36 @@ void checkDaTime() {
       Serial.print(fJam);
       Serial.print(" : ");
       Serial.println(fMinute);
+
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Jam : ");
+      lcd.setCursor(6, 0);
+      lcd.print(rHour < 10 ? "0" : "");
+      lcd.print(rHour);
+      lcd.print(":");
+      lcd.print(rMinute < 10 ? "0" : "");
+      lcd.print(rMinute);
+      lcd.setCursor(0, 1);
+      lcd.print("Obat ke ");
+      lcd.print(index);
+      lcd.print(": ");
+      lcd.print(fJam < 10 ? "0" : "");
+      lcd.print(fJam);
+      lcd.print(":");
+      lcd.print(fMinute < 10 ? "0" : "");
+      lcd.print(fMinute);
       delay(1000);
       if (fJam == rHour && fMinute == rMinute)
       {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Saatnya");
+        lcd.setCursor(0, 1);
+        lcd.print("Minum Obat");
+        delay(2000);
         Serial.print("Saatnya Minum Obat !!");
+        audio.connecttospeech("Saatnya Minum Obat", "id");
         stepperRun();
         // Kode Loadcell --------------------------------------------------------
         if (scale.is_ready()) {
@@ -601,6 +619,16 @@ void checkDaTime() {
       }
     }
   }
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Isi Kembali");
+  lcd.setCursor(0, 1);
+  lcd.print("Jam :");
+  lcd.print(tHour < 10 ? "0" : "");
+  lcd.print(tHour);
+  lcd.print(":");
+  lcd.print(tMinutes < 10 ? "0" : "");
+  lcd.print(tMinutes);
   Serial.println("Tidak ada jadwal lagi Selamat Beraktifitas !! :)");
   Serial.print("Jam Sekarang : ");
   Serial.println(String(tHour) + " : " + String(tMinutes));

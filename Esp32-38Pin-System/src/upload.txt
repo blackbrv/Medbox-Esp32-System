@@ -13,12 +13,12 @@
 #include "HX711.h"
 #include "addons/TokenHelper.h"
 
-#define API_KEY "AIzaSyB-o1L9crZrI-IqR8S5jmMtMopJeDb98mk" // Deklarasi API_KEY untuk Firebase
-#define DATABASE_URL "https://madbox4195-default-rtdb.firebaseio.com/" // Deklarasi url untuk firebase
-#define ESP32_KEY "Alat_Test" //Deklarasi untuk nama alat 
-#define FIREBASE_PROJECT_ID "madbox4195"
-#define USER_EMAIL "esp.admin@esp32.com"
-#define USER_PASSWORD "adminesp32"
+#define API_KEY "XXXXXXXX" // Deklarasi API_KEY untuk Firebase
+#define DATABASE_URL "XXXXXXXXXX" // Deklarasi url untuk firebase
+#define ESP32_KEY "tester" //Deklarasi untuk nama alat 
+#define FIREBASE_PROJECT_ID "xxxxxx"
+#define USER_EMAIL "xxxxxx"
+#define USER_PASSWORD "xxxxxxxxxxxx"
 
 //Deklarasi Pin untuk modul MAX98357A
 #define I2S_DOUT 25
@@ -33,11 +33,11 @@ const int dirPin = 18;  // DIR pin pada ESP32 untuk Motor stepper
 const int stepPin = 19; // Step pin pada ESP32 untuk Motor stepper
 const int stepsPerRevolution = 200; // Deklarasi berapa step stepper harus bergerak
 
-String ssid =  "Lacasa salam dari Ibrahim"; //Lacasa salam dari Ibrahim, Psg567uber, Deklarasi Untuk SSID WiFi
-String password =  "iyatunggu"; //iyatunggu, Akca130797, Deklarasi Password WiFi
+String ssid =  "define ur ssid"; //
+String password =  "define ur pass"; //
 String daysOfTheWeek[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
-Audio audio(false, 3, 0); // Deklarasi Library Audio dengan audio
+Audio audio; // Deklarasi Library Audio dengan audio
 HX711 scale; // Deklarasi Library HX711 dengan scale
 FirebaseData fbdo;
 FirebaseAuth auth;
@@ -569,14 +569,14 @@ void checkDaTime() {
       //delay(1000);
       if (fJam == rHour && fMinute == rMinute)
       {
-        audio.connecttospeech(chbuf, "id");
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("Saatnya");
         lcd.setCursor(0, 1);
         lcd.print("Minum Obat"); 
-        delay(2000);
+        //delay(2000);
         Serial.print("Saatnya Minum Obat !!");
+        audio.connecttospeech(chbuf, "id");
         stepperRun();
         // Kode Loadcell --------------------------------------------------------
         if (scale.is_ready()) {
@@ -584,7 +584,7 @@ void checkDaTime() {
           Serial.print("Membaca data pertama: ");
           Serial.print(firstReading);
           Serial.println(" Gram");
-          delay(5000);
+          //delay(5000);
           long secondReading = scale.get_units(10);
           Serial.print("Membaca data kedua: ");
           Serial.print(secondReading);
@@ -621,7 +621,6 @@ void checkDaTime() {
       }
     }
   }
-
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Isi Kembali");
@@ -652,8 +651,8 @@ void stepperRun() {
     delayMicroseconds(1000);
     digitalWrite(stepPin, LOW);
     delayMicroseconds(1000);
+    digitalWrite(relayMotorPin, LOW);
   }
-  digitalWrite(relayMotorPin, LOW);
 }
 
 void audio_info(const char *info){
